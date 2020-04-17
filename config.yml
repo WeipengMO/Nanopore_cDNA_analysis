@@ -1,0 +1,5 @@
+reference: /public/home/mowp/db/Arabidopsis_thaliana/dna/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa
+cds_bed: /public/home/mowp/test/nanopore_cdna/test/cds.sorted.bed
+polya_data: /public/home/mowp/test/fast5_api/fhh.polyacaller.ann.tsv
+gff_file: /public/home/mowp/db/Arabidopsis_thaliana/gff3/Arabidopsis_thaliana.TAIR10.46.gff3
+first_exon_path: /public/home/mowp/test/nanopore_cdna/supplementary_data/representative_exon/representative_gene_first_exon.tsv
