@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 12:01:25
-@LastEditTime : 2020-04-17 16:45:35
+@LastEditTime : 2020-04-18 17:36:46
 @Description  : Mixes a list of 3' or 5' results into a list of chromosomes start and end sites as created by findCoverageBreaks
 '''
 
@@ -12,17 +12,21 @@ import pickle
 import click
 
 
-CONFIG = {'min_3dash_threshold': 10, 'min_3dash_peak_separation': 30,
-          'min_3dash_end_separation': 100, 'min_5dash_threshold': 10,
-          'min_5dash_peak_separation': 30, 'min_5dash_start_separation': 100, 'max_5dash_offset': 200}
+CONFIG = {'min_3dash_threshold': 10, 'min_3dash_peak_separation': 30, 'min_3dash_end_separation': 100, 
+          'min_5dash_threshold': 10, 'min_5dash_peak_separation': 30, 'min_5dash_start_separation': 100, 
+          'max_5dash_offset': 200}
 
 
 def clusterMean(cluster):
+    '''
+    返回cluster中位置的加权平均值
+    # TODO 调整为最靠近加权平均值的位置
+    '''
     totalSites=0
     totalPosition=0
     #The mean is calculated proportionnaly to the number of sites or each position
     for site in cluster:
-        totalSites = totalSites+int(site["coverage"])
+        totalSites += int(site["coverage"])
         totalPosition = totalPosition+(int(site["position"])*int(site["coverage"]))
 
     return round(totalPosition/totalSites)
@@ -59,16 +63,21 @@ def insert_dash_cuts(in3dash_file, in5dash_file, chromosome_data, outfile):
             sourceFile = in3dash_file
         elif dash == "5":
             sourceFile = in5dash_file
+        # @sourceFile: reads 3'/5' 端覆盖度
+        # @sourceFile format: chro, pos, cov
+        #                     1  5743  1
         with open(sourceFile, "r") as dashList:
             for line in dashList:
                 currentDashSite["chr"],  currentDashSite["position"],  currentDashSite["coverage"] = line.rstrip().split("\t")
                 #First check if we are entering a new chromosome
+                # 新的染色体，计算上一染色体最后的结果，并初始化
                 if currentDashSite["chr"] != currentChr:
                     #if so, store the list of sites for the previous chromosome, then empty the list and reset the variables
                     if currentChr is not None:
-                        if currentCluster != []:
+                        if len(currentCluster) > 0:
                             currentChrList.append(clusterMean(currentCluster))
                         dashSiteList[currentChr] = list(currentChrList)
+                    # 初始化
                     currentCluster = []
                     currentChr=currentDashSite["chr"]
                     currentChrList = []
@@ -76,13 +85,14 @@ def insert_dash_cuts(in3dash_file, in5dash_file, chromosome_data, outfile):
 
                 #lines with a coverage less than a threshold (min_3dash_threshold) are ignored
                 if int(currentDashSite["coverage"]) > CONFIG[f"min_{dash}dash_threshold"]:
-                    #Peaks within a distance of each other (min_3dash_peak_separation) are clustered together
+                    # Peaks within a distance of each other (min_3dash_peak_separation) are clustered together
+                    # 将相近的dash site聚在一起
                     if lastDashSite is None or int(currentDashSite["position"])-int(lastDashSite["position"]) < CONFIG[f"min_{dash}dash_peak_separation"]:
                         currentCluster.append(dict(currentDashSite))
                     #If the peak is far enough from the last cluster, register the mean position for the peak and reset the cluster with our new result
                     else:
                         #The mean position is stored in the current chromosome list
-                        if currentCluster != []:
+                        if len(currentCluster) > 0:
                             currentChrList.append(clusterMean(currentCluster))
                         # 重置，计算下一个cluster
                         currentCluster = []
@@ -95,7 +105,9 @@ def insert_dash_cuts(in3dash_file, in5dash_file, chromosome_data, outfile):
             currentChrList.append(clusterMean(currentCluster))
             dashSiteList[currentChr] = list(currentChrList)
         #The dashSiteList now contains every cut site given by our 3' or 5' file, organized by chomosome name
-        # dashSiteList 为上面结果汇总，为每一挑染色体上，每一个cluster的均值
+        # dashSiteList 为上面结果汇总，为每一染色体上，每一个cluster的均值
+        # dashSiteList format：[74049, 74095, 89752, ...]
+        #                      一个包含dashsite的列表
 
         #Copy the dash site list to the correct variable
         if dash == "3":
@@ -104,6 +116,7 @@ def insert_dash_cuts(in3dash_file, in5dash_file, chromosome_data, outfile):
             dashSiteList5=dict(dashSiteList)
 
     #Compare the dashSiteList with our chromosomeList chromosome by chromosome
+    # chromosomeList 为连续overlap的reads区间
     newChrList = {}
     geneNumber = 0
     for chro, geneList in chromosomeList.items():

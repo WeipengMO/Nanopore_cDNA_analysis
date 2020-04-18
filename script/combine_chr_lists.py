@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 16:56:35
-@LastEditTime : 2020-04-17 17:17:32
+@LastEditTime : 2020-04-18 17:49:45
 @Description  : Combines two chromosomes list together respecting the ordering
 '''
 
@@ -45,10 +45,12 @@ def combineChrLists(positive, negative, outfile):
     #The mergedChrList should now contain every gene for every chromosome sorted by chromosome and position
 
     #Write the output as a bed file
+    count = 0
     with open(outfile, "w") as bedGenes:
         for chro, genelist in mergedChrList.items():
             for gene in genelist:
-                bedGenes.write(f'{chro}\t{gene["start"]}\t{gene["end"]}\t{gene["strand"]}\n')
+                count += 1
+                bedGenes.write(f'{chro}\t{gene["start"]}\t{gene["end"]}\tgene_{count}\t0\t{gene["strand"]}\n')
 
 
 if __name__ == "__main__":

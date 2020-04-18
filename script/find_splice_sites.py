@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 17:26:26
-@LastEditTime : 2020-04-18 09:32:11
+@LastEditTime : 2020-04-18 20:27:32
 @Description  : Find splice sites in a bed file created with the -split option
 '''
 
@@ -29,7 +29,8 @@ def get_spliced_transcript(exons):
         lastexon = exon
     #the remaining end position at the end of the loop is the end of the transcript
     end = lastexon[2]
-    return [chro, start, end, spliceSites]
+    strand = lastexon[5]
+    return [chro, start, end, strand, spliceSites]
     
 
 def get_isoform(transcripts):
@@ -44,9 +45,10 @@ def get_isoform(transcripts):
         start += int(transcript[1])
         end += int(transcript[2])
     #the last part of each transcript should be the same splice sites
-    spliceSites=transcript[3]
+    spliceSites = transcript[4]
+    strand = transcript[3]
     len_transcript = len(transcripts)
-    return [chro, round(start/len_transcript), round(end/len_transcript), len_transcript-1, spliceSites]
+    return [chro, round(start/len_transcript), round(end/len_transcript), len_transcript-1, strand, spliceSites]
 
 
 @click.command()
@@ -97,7 +99,7 @@ def find_splice_sites(infile, outfile):
     lastSpliceSites = None
     # splicedTranscripts is a list contains [chro, start, end, spliceSites]
     for transcript in splicedTranscirpts:
-        spliceSites = " ".join(transcript[3])
+        spliceSites = " ".join(transcript[4])
         # 完全一样？无考虑测序错误情况
         # TODO(windz) 可优化
         if spliceSites == lastSpliceSites:
@@ -112,13 +114,13 @@ def find_splice_sites(infile, outfile):
 
             currentIsoform=[transcript]
         # 上一个splice sites的位置(字符串)
-        lastSpliceSites=spliceSites
+        lastSpliceSites = spliceSites
 
 
     with open(outfile, "w") as outFile:
         for transcript in isoforms:
             # chro, start, end, length, spliceSites
-            outFile.write(f'{transcript[0]}\t{transcript[1]}\t{transcript[2]}\t{transcript[3]}\t{",".join(transcript[4])}\n')
+            outFile.write(f'{transcript[0]}\t{transcript[1]}\t{transcript[2]}\t{transcript[3]}\t{transcript[4]}\t{",".join(transcript[5])}\n')
 
 
 if __name__ == '__main__':

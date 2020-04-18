@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 11:13:07
-@LastEditTime : 2020-04-17 11:43:47
+@LastEditTime : 2020-04-18 16:29:50
 @Description  : 
 '''
 
@@ -51,6 +51,7 @@ def find_coverage_breaks(infile, outfile, min_coverage_threshold):
                 if int(cov) < min_coverage_threshold:
                     currentGene["end"]=int(pos)
                     currentGenes.append(currentGene)
+                    # 重新初始化
                     currentGene = {"start":None, "end":None, "strand":strand}
                     geneNumber = geneNumber+1
 

@@ -1,4 +1,4 @@
-reference: /public/home/mowp/db/Arabidopsis_thaliana/dna/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa
+genome: /public/home/mowp/db/Arabidopsis_thaliana/dna/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa
 cds_bed: /public/home/mowp/test/nanopore_cdna/test/cds.sorted.bed
 polya_data: /public/home/mowp/test/fast5_api/fhh.polyacaller.ann.tsv
 gff_file: /public/home/mowp/db/Arabidopsis_thaliana/gff3/Arabidopsis_thaliana.TAIR10.46.gff3

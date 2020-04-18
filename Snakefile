@@ -17,7 +17,10 @@ TYPE = ['genome', 'unique']
 
 rule all:
     input:
-        #expand('aligned_data/{sample_name}.adjust.mm2.sorted.bam', sample_name=SAMPLE_NAME),
+        # full_length transcript:
+        expand('full_length_transcripts/{sample_name}.full_length.sorted.bam', sample_name=SAMPLE_NAME),
+        expand('full_length_transcripts/{sample_name}.non_full_length.sorted.bam', sample_name=SAMPLE_NAME),
+        # isoform
         expand('transitional/{sample_name}.total_coverage.tsv', sample_name=SAMPLE_NAME),
         expand('transitional/{sample_name}.full_genelist.bed', sample_name=SAMPLE_NAME),
         expand('transitional/{sample_name}.{type}_splicing_isoforms.bed', sample_name=SAMPLE_NAME, type=TYPE)
@@ -112,6 +115,7 @@ rule get_full_length_transcripts:
         samtools index {output.non_full_len}
         '''
         
+        
 rule bam_to_bed:
     input:
         'aligned_data/{sample_name}.tagged.mm2.sorted.bam'
@@ -126,6 +130,7 @@ rule bam_to_bed:
         '''
 
 
+# separating bedfile between positive and negative reads
 rule separate_bed_file:
     input:
         'transitional/{sample_name}.tagged.mm2.sorted.bed'
@@ -152,7 +157,7 @@ rule bed_to_fasta:
     threads: 1
     shell:
         '''
-        bedtools getfasta -fi {input.reference} -bed {input.bed} -fo {output}
+        bedtools getfasta -s -fi {input.reference} -bed {input.bed} -fo {output}
         '''
 
 
@@ -198,6 +203,7 @@ rule combine_coverage:
         python script/combine_coverage.py --positive {input.positive} --negative {input.negative} --output {output}
         '''
 
+# 找连续的overlap的reads区间
 rule find_coverage_breaks:
     input:
         'transitional/{sample_name}.{strand}_coverage.tsv'
@@ -235,6 +241,8 @@ rule genome_cov_5dash:
         bedtools genomecov -dz -5 -ibam {input} > {output}
         '''
 
+
+# Intersect genes start and end positions from the coverage analysis and cuts to refine our analysis
 rule insert_dash_cuts:
     input:
         in3dash = 'transitional/{sample_name}.{strand}.3dash_positions.tsv',
