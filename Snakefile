@@ -1,5 +1,5 @@
 '''
-A pipline for calling polya tail length
+A pipline for nanopore cdna
 You can run like this:
 snakemake -j 6 -c "qsub -N {rulename} -l nodes=1:ppn={threads} -l mem=32g -j oe -l walltime=900:00:00"
 '''
@@ -12,13 +12,15 @@ configfile: 'config.yml'
 
 SAMPLE_NAME = [os.path.basename(path).replace('.fastq.gz', '') for path in glob.glob('basecalled_data/*.fastq.gz')]
 STRAND = ['positive', 'negative']
-    
+TYPE = ['genome', 'unique']
+
+
 rule all:
     input:
         #expand('aligned_data/{sample_name}.adjust.mm2.sorted.bam', sample_name=SAMPLE_NAME),
         expand('transitional/{sample_name}.total_coverage.tsv', sample_name=SAMPLE_NAME),
-        #expand('transitional/{sample_name}.{strand}.genelist.bed', sample_name=SAMPLE_NAME, strand=STRAND)
-        expand('transitional/{sample_name}.full_genelist.bed', sample_name=SAMPLE_NAME)
+        expand('transitional/{sample_name}.full_genelist.bed', sample_name=SAMPLE_NAME),
+        expand('transitional/{sample_name}.{type}_splicing_isoforms.bed', sample_name=SAMPLE_NAME, type=TYPE)
         
 
 # qcat only accept ungzip file
@@ -64,7 +66,7 @@ rule adjust_strandedness:
 rule minimap2_mapping:
     input:
         reads='trim_data/{sample_name}.adjust.fastq.gz',
-        ref=config['reference']
+        ref=config['genome']
     output:
         temp_bam=temp('aligned_data/{sample_name}.adjust.tmp.bam'),
         bam='aligned_data/{sample_name}.adjust.mm2.sorted.bam'
@@ -144,7 +146,7 @@ rule separate_bed_file:
 rule bed_to_fasta:
     input:
         bed = 'transitional/{sample_name}.{strand}.bed',
-        reference = config['reference']
+        reference = config['genome']
     output:
         temp('transitional/{sample_name}.{strand}.fasta')
     threads: 1
@@ -157,7 +159,7 @@ rule bed_to_fasta:
 rule remapping:
     input:
         reads='transitional/{sample_name}.{strand}.fasta',
-        ref=config['reference']
+        ref=config['genome']
     output:
         temp_bam=temp('transitional/{sample_name}.{strand}.tmp.bam'),
         bam='transitional/{sample_name}.{strand}.mm2.sorted.bam'
@@ -260,6 +262,82 @@ rule combine_chr_lists:
     threads: 1
     shell:
         '''
-        python script/combine_chr_lists.py --positive {input.positive} --negative {input.negative} --output {output}
+        python script/combine_chr_lists.py --positive {input.positive} --negative {input.negative} --outfile {output}
         '''
-    
+
+# Finding splicing isoforms
+rule find_splice_sites:
+    input:
+        'transitional/{sample_name}.tagged.mm2.sorted.split.bed'
+    output:
+        'transitional/{sample_name}.raw_splice_sites.tsv'
+    threads: 1
+    shell:
+        '''
+        python script/find_splice_sites.py --infile {input} --outfile {output}
+        '''
+
+
+rule filter_by_coverage:
+    input:
+        raw_splice_sites = 'transitional/{sample_name}.raw_splice_sites.tsv',
+        coverage_file = 'transitional/{sample_name}.total_coverage.tsv'
+    output:
+        'transitional/{sample_name}.coverage_filtered_splice_sites.tsv'
+    params:
+        max_cov=100
+    threads: 1
+    shell:
+        '''
+        python script/filter_by_coverage.py \
+            --raw_splice_sites {input.raw_splice_sites} \
+            --coverage_file {input.coverage_file} \
+            --filtered_splice_sites {output}
+        '''
+        
+
+rule filter_by_genome:
+    input:
+        raw_isoform_file = 'transitional/{sample_name}.coverage_filtered_splice_sites.tsv',
+        genome = config['genome']
+    output:
+        'transitional/{sample_name}.genome_filtered_splice_sites.tsv'
+    params:
+        max_polya_length = 8,
+        min_exon_length = 50,  # TODO 是否需要调节
+        max_single_base_to_length_ratio = 0.7
+    threads: 1
+    shell:
+        '''
+        python script/filter_by_genome.py \
+            --raw_isoform_file {input.raw_isoform_file} \
+            --genome_file {input.genome} \
+            --filtered_isoform_file {output}
+        '''
+        
+
+rule find_best_isoform:
+    input:
+        'transitional/{sample_name}.genome_filtered_splice_sites.tsv'
+    output:
+        'transitional/{sample_name}.unique_filtered_splice_sites.tsv'
+    params:
+        max_splice_difference = 10
+    threads: 1
+    shell:
+        '''
+        python script/find_best_isoform.py --infile {input} --outfile {output}
+        '''
+
+
+# Translating to bed format for the final results
+rule convert_isoforms_to_bed:
+    input:
+        'transitional/{sample_name}.{type}_filtered_splice_sites.tsv'
+    output:
+        'transitional/{sample_name}.{type}_splicing_isoforms.bed'
+    threads: 1
+    shell:
+        '''
+        python script/convert_isoforms_to_bed.py --infile {input} --outfile {output}
+        '''
