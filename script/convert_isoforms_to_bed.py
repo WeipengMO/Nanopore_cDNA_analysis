@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 '''
 @Author       : windz
-@Date         : 2020-04-18 12:13:33
-@LastEditTime : 2020-04-18 15:03:28
+@Date         : 2020-04-22 11:36:06
+@LastEditTime : 2020-04-22 13:17:52
 @Description  : Writes a bed file from a file containing isoforms
 '''
 
@@ -21,8 +21,15 @@ def convert_isoforms_to_bed(infile, outfile):
             chro = parts[0]
             start = parts[1]
             end = parts[2]
+            strand = parts[3]
+            score = parts[4]
             # readCount=parts[3]
-            spliceSites = parts[4].split(',')
+            spliceSites = parts[5].split(',')
+            # for intronless isoform
+            if len(spliceSites) < 2:
+                outFile.write(f'{chro}\t{start}\t{end}\tisoform_{count}\t{score}\t{strand}\t{start}\t{end}\t'
+                              f'0\1\t{int(end)-int(start)}\t0\n')
+                continue
             #Translate the splice sites into exons
             exons = []
             exon = [int(start),None]
@@ -42,7 +49,7 @@ def convert_isoforms_to_bed(infile, outfile):
                 blockSizes += f'{exon[1]-exon[0]},'
                 blockStarts += f'{exon[0]-int(start)},'
 
-            outFile.write(f'{chro}\t{start}\t{end}\tisoform_{count}\t0\t.\t{start}\t{end}\t'
+            outFile.write(f'{chro}\t{start}\t{end}\tisoform_{count}\t{score}\t{strand}\t{start}\t{end}\t'
                           f'0\t{len(exon)}\t{blockSizes}\t{blockStarts}\n')
 
 
