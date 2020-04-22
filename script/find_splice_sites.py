@@ -7,6 +7,8 @@
 @Description  : Find splice sites in a bed file created with the -split option
 '''
 
+
+import logging
 from collections import namedtuple
 import numpy as np
 import click
@@ -23,23 +25,43 @@ def get_spliced_transcript(last_line, spliced_sites_list):
     return chro, start, end, strand, spliced_sites, read_id
 
 
+def is_cluster(curr_transcript, last_transcript, max_difference):
+    # 判断两条reads是否为同一个isoform cluster
+    curr_transcript = np.fromstring(curr_transcript, sep=',', dtype=int)
+    last_transcript = np.fromstring(last_transcript, sep=',', dtype=int)
+    if len(curr_transcript) != len(last_transcript):
+        # 如果splice sites数目不一致，认为不是同一个cluster
+        return False
+    res = (abs(curr_transcript - last_transcript) < max_difference).all()
+    return res
+
+
 def get_isoform(transcripts):
     # 计算这一isoform cluster的 start 和 end 的加权平均值
     start, end = 0, 0
     read_id = []
+    spliced_sites = None
     for count, transcript in enumerate(transcripts, 1):
         start += int(transcript[1])
         end += int(transcript[2])
         read_id.append(transcript[5])
+        if spliced_sites is None:
+            spliced_sites = np.fromstring(transcript[4], sep=',', dtype=int)
+        else:
+            spliced_sites += np.fromstring(transcript[4], sep=',', dtype=int)
 
     chro = transcript[0]
     start = round(start/count)
     end = round(end/count)
     strand = transcript[3]
-    spliced_sites = transcript[4]
+    spliced_sites = np.round(spliced_sites/count).astype(int)
+    spliced_sites = ','.join([str(item) for item in spliced_sites])
     read_id = ','.join(read_id)
 
     return '\t'.join([chro, str(start), str(end), strand, str(count), spliced_sites, read_id])
+
+
+logging.basicConfig(format='[%(asctime)s]  %(message)s')
 
 
 @click.command()
@@ -58,6 +80,7 @@ def find_splice_sites(infile, outfile, max_difference, min_transcript_count):
     spliced_transcirpts = []
     intronless_transcirpts = []
     # Seach for duplicated instances of reads in the split file (split sites) by comparing their names
+    logging.info('start load infile')
     with open(infile, 'r') as bedFile:
         for line in bedFile:
             chro, start, end, read_id, score, strand = line.rstrip().split('\t')
@@ -81,18 +104,19 @@ def find_splice_sites(infile, outfile, max_difference, min_transcript_count):
     spliced_transcirpts.sort(key=lambda transcript: transcript[4]) # sort by splice sites
     spliced_transcirpts.sort(key=lambda transcript: transcript[0]) # sort by chr
 
+    logging.info('start output')
     with open(outfile, 'w') as out:
         # for intron-contained transcripts
         last_transcript = None
         current_isoform = []
         for transcript in spliced_transcirpts:
-            if last_transcript is not None and transcript[-2] != last_transcript[-2]:
+            if last_transcript is not None and not is_cluster(transcript[-2], last_transcript[-2], max_difference):
                 # 有3条reads支持的isoform (min_transcript_count)
                 if len(current_isoform) >= min_transcript_count:
                     out.write(get_isoform(current_isoform)+'\n')
                 # 重新初始化
                 current_isoform = [transcript]
-            elif last_transcript is not None and transcript[-2] == last_transcript[-2]:
+            elif last_transcript is not None and is_cluster(transcript[-2], last_transcript[-2], max_difference):
                 current_isoform.append(transcript)
             elif last_transcript is None:
                 current_isoform.append(transcript)
