@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-22 11:36:06
-@LastEditTime : 2020-04-23 14:45:55
+@LastEditTime : 2020-04-23 19:30:41
 @Description  : Writes a bed file from a file containing isoforms
 '''
 
@@ -32,8 +32,11 @@ def convert_isoforms_to_bed(infile, outfile):
             spliceSites = parts[5].split(',')
             # for intronless isoform
             if len(spliceSites) < 2:
-                outFile.write(f'{chro}\t{start}\t{end}\tisoform_{count}\t{score}\t{strand}\t{start}\t{end}\t'
-                              f'0\t1\t{int(end)-int(start)}\t0\n')
+                # 由于start和end不准，所以使用较严格的标准
+                # count要大于10才输出
+                if int(score) >= 10:
+                    outFile.write(f'{chro}\t{start}\t{end}\tintronless_{count}\t{score}\t{strand}\t{start}\t{end}\t'
+                                  f'{itemRgb[strand]}\t1\t{int(end)-int(start)}\t0\n')
                 continue
             #Translate the splice sites into exons
             exons = []
@@ -54,7 +57,7 @@ def convert_isoforms_to_bed(infile, outfile):
                 blockSizes += f'{exon[1]-exon[0]},'
                 blockStarts += f'{exon[0]-int(start)},'
 
-            outFile.write(f'{chro}\t{start}\t{end}\tisoform_{count}\t{score}\t{strand}\t{start}\t{end}\t'
+            outFile.write(f'{chro}\t{start}\t{end}\tspliced_{count}\t{score}\t{strand}\t{start}\t{end}\t'
                           f'{itemRgb[strand]}\t{len(exon)}\t{blockSizes}\t{blockStarts}\n')
 
 
