@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 17:26:26
-@LastEditTime : 2020-04-23 11:33:08
+@LastEditTime : 2020-04-23 14:53:43
 @Description  : Find splice sites in a bed file created with the -split option
 '''
 
@@ -21,75 +21,65 @@ logging.basicConfig(level=logging.DEBUG,
                     filemode='w')
 
 
-Isoform = namedtuple('Isoform', 'chro start end strand count spliced_sites read_id')
 class Cluster:
-    '''
-    a class for isoform cluster
+    '''A cluster of transcript.
 
     Attributes:
-        self.isoform: a list contain transcript (chro, start, end, strand, spliced_sites, read_id)
-        self.isoform: the isoform of the cluster
+        __chro: chromosome of the cluster
+        __start: sum of start sites of transcripts
+        __end: sum of start sites of transcripts
+        __strand: strand of the cluster
+        __spliced_sites: a numpy array, sum of spliced sites of transcripts
+        __count: read counts in the cluster
+        __max_difference: max difference between sites
     '''
-    transcripts = None
-    isoform = None
-    max_difference = 10  # 参数
+    def __init__(self, transcript):
+        self.__chro = transcript[0]
+        self.__start = int(transcript[1])
+        self.__end = int(transcript[2])
+        self.__strand = transcript[3] 
+        self.__spliced_sites = np.fromstring(transcript[4], sep=',', dtype=int)
+        self.__read_id = [transcript[5]] 
+        self.__count = 1 
+        self.__max_difference = 10
 
     def add_transcript(self, transcript):
-        '''
-        add transcript to cluster
+        '''Add transcript to cluster
         ''' 
-        if self.transcripts is None:
-            self.transcripts = [transcript]
-        else:
-            self.transcripts.append(transcript)
-        self.isoform = self.get_isoform()
-        
-    def get_isoform(self):
-        '''
-        get the start, end, and spliced_site of the cluster
-        return an Isoform nametuple
-        '''
-        start, end = 0, 0
-        read_id = []
-        spliced_sites = None
-        # TODO 优化，储存前面结果，仅需要添加，不需要重新循环计算
-        for count, transcript in enumerate(self.transcripts, 1):
-            start += int(transcript[1])
-            end += int(transcript[2])
-            read_id.append(transcript[5])
-            if spliced_sites is None:
-                spliced_sites = np.fromstring(transcript[4], sep=',', dtype=int)
-            else:
-                spliced_sites += np.fromstring(transcript[4], sep=',', dtype=int)
+        self.__start += int(transcript[1])
+        self.__end += int(transcript[2])
+        self.__spliced_sites += np.fromstring(transcript[4], sep=',', dtype=int)
+        self.__count += 1
+        self.__read_id.append(transcript[5])
 
-        chro = transcript[0]
-        start = round(start/count)
-        end = round(end/count)
-        strand = transcript[3]
-        spliced_sites = np.round(spliced_sites/count).astype(int)
-        spliced_sites = ','.join([str(item) for item in spliced_sites])
-        read_id = ','.join(read_id)
-        
-        return Isoform(chro, str(start), str(end), strand, str(count), spliced_sites, read_id)
-    
     def in_cluster(self, transcript):
+        '''Determine if the transcript belong to cluster
         '''
-        判断transcript是否属于cluster
-        '''
-        # 忽略intronless transcript
-        if transcript[3] != self.isoform.strand and transcript[4] == '':
+        # ignore intronless transcript
+        if transcript[3] != self.__strand and transcript[4] == '':
             return False
-        isoform_spliced_sites = np.fromstring(self.isoform.spliced_sites, sep=',', dtype=int)
+        spliced_sites = np.round(self.__spliced_sites/self.__count).astype(int)
         transcript_spliced_sites = np.fromstring(transcript[4], sep=',', dtype=int)
-        if len(isoform_spliced_sites) == len(transcript_spliced_sites):
+        if len(spliced_sites) == len(transcript_spliced_sites):
             # spliced_site 相差不超过 max_difference
-            res = (abs(isoform_spliced_sites - transcript_spliced_sites) < self.max_difference).all()
+            res = (abs(spliced_sites - transcript_spliced_sites) < self.__max_difference).all()
             return res
         else:
             return False
     
     def __call__(self):
-        return self.isoform
+        '''Return isoform info of the cluster
+        '''
+        chro = self.__chro
+        start = str(round(self.__start/self.__count))
+        end = str(round(self.__end/self.__count))
+        strand = self.__strand
+        count = str(self.__count)
+        spliced_sites = np.round(self.__spliced_sites/self.__count).astype(int)
+        spliced_sites = ','.join([str(item) for item in spliced_sites])
+        read_id = ','.join(self.__read_id)
+
+        return chro, start, end, strand, count, spliced_sites, read_id
 
 
 def get_spliced_transcript(last_line, spliced_sites_list):
@@ -123,7 +113,7 @@ def find_splice_sites(infile, outfile, max_difference, min_transcript_count):
     intronless_transcirpts = []
     chromosome = set()
     # Seach for duplicated instances of reads in the split file (split sites) by comparing their names
-    logging.info('start load infile')
+    logging.debug('Loading infile')
     with open(infile, 'r') as bedFile:
         for line in bedFile:
             chro, start, end, read_id, score, strand = line.rstrip().split('\t')
@@ -143,82 +133,47 @@ def find_splice_sites(infile, outfile, max_difference, min_transcript_count):
         # 处理最后一条read
         spliced_transcirpts.append(get_spliced_transcript(last_line, spliced_sites_list))
 
-    #sort our duplicate list by key, then by chromosome name for later manipulation
-    print(f'start sorted')
+    # Sort our duplicate list by key, then by chromosome name for later manipulation
+    logging.debug('Sorting spliced transcripts')
     spliced_transcirpts.sort(key=lambda transcript: transcript[3]) # sort by strand
     spliced_transcirpts.sort(key=lambda transcript: transcript[4]) # sort by splice sites
     spliced_transcirpts.sort(key=lambda transcript: len(transcript[4])) # sort by splice sites counts
     spliced_transcirpts.sort(key=lambda transcript: transcript[0]) # sort by chr
+    total_count = len(spliced_transcirpts)
 
     
-    # create result dict
+    # Init result dict
     isoform_dict = {}
     for chro in chromosome:
         isoform_dict[chro] = []
     
-    print('start cluster')
+    logging.debug('Clustering transcripts')
+    # TODO 可优化
     max_search = 100
-    for n, transcript in enumerate(spliced_transcirpts):
-        if n % 1000 == 0:
-            print(f'treat {n} reads')
+    for count, transcript in enumerate(spliced_transcirpts, 1):
+        if count % 10000 == 0:
+            logging.debug(f'Treating {count} of {total_count} reads')
+
         chro = transcript[0]
-        need_to_add = True
-        for search, isoform in enumerate(isoform_dict[chro][::-1]):
+        need_append = True
+        for search, isoform in enumerate(isoform_dict[chro][::-1], 1):
             if search > max_search:
                 break
             if isoform.in_cluster(transcript):
                 isoform.add_transcript(transcript)
-                need_to_add = False
+                need_append = False
                 break
-        if need_to_add:
-            isoform = Cluster()
-            isoform.add_transcript(transcript)
+        if need_append:
+            isoform = Cluster(transcript)
             isoform_dict[chro].append(isoform)
     
-    logging.info('start output')
+    logging.info('Starting output')
     with open(outfile, 'w') as out:
         for chro in sorted(isoform_dict):
             for isoform in isoform_dict[chro]:
                 isoform = isoform()
-                if int(isoform.count) >= min_transcript_count:
+                if int(isoform[4]) >= min_transcript_count:
                     out.write('\t'.join(isoform)+'\n')
-
-'''
-        # for intron-contained transcripts
-        last_transcript = None
-        current_isoform = []
-        for transcript in spliced_transcirpts:
-            if last_transcript is not None and not is_cluster(transcript[-2], last_transcript[-2], max_difference):
-                # 有3条reads支持的isoform (min_transcript_count)
-                if len(current_isoform) >= min_transcript_count:
-                    out.write(get_isoform(current_isoform)+'\n')
-                # 重新初始化
-                current_isoform = [transcript]
-            elif last_transcript is not None and is_cluster(transcript[-2], last_transcript[-2], max_difference):
-                current_isoform.append(transcript)
-            elif last_transcript is None:
-                current_isoform.append(transcript)
-            last_transcript = transcript
-        if len(current_isoform) >= min_transcript_count:
-            out.write(get_isoform(current_isoform)+'\n')
-        
-        # for intronless transcripts
-        last_transcript = None
-        current_isoform = []
-        for transcript in intronless_transcirpts:
-            current_position = np.array((int(transcript[1]), int(transcript[2])))
-            if (last_transcript is not None and 
-                    (last_transcript[3] != transcript[3] 
-                        or not(abs(last_position - current_position) < max_difference).all())):
-                if len(current_isoform) >= min_transcript_count:
-                    out.write(get_isoform(current_isoform)+'\n')
-                current_isoform = []
-            current_isoform.append(transcript)
-            last_position = current_position
-            last_transcript = transcript
-        if len(current_isoform) >= min_transcript_count:
-            out.write(get_isoform(current_isoform)+'\n')
-'''
 
 
 if __name__ == '__main__':
