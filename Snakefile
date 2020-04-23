@@ -12,7 +12,7 @@ configfile: 'config.yml'
 
 SAMPLE_NAME = [os.path.basename(path).replace('.fastq.gz', '') for path in glob.glob('basecalled_data/*.fastq.gz')]
 STRAND = ['positive', 'negative']
-TYPE = ['genome', 'unique']
+TYPE = ['spliced', 'intronless']
 
 
 rule all:
@@ -21,9 +21,8 @@ rule all:
         expand('full_length_transcripts/{sample_name}.full_length.sorted.bam', sample_name=SAMPLE_NAME),
         expand('full_length_transcripts/{sample_name}.non_full_length.sorted.bam', sample_name=SAMPLE_NAME),
         # isoform
-        expand('transitional/{sample_name}.total_coverage.tsv', sample_name=SAMPLE_NAME),
-        expand('transitional/{sample_name}.full_genelist.bed', sample_name=SAMPLE_NAME),
-        expand('transitional/{sample_name}.{type}_splicing_isoforms.bed', sample_name=SAMPLE_NAME, type=TYPE)
+        #expand('splicing_isoforms/{sample_name}.raw_splice_sites.tsv', sample_name=SAMPLE_NAME),
+        expand('splicing_isoforms/{sample_name}.full_length_isoform.bed', sample_name=SAMPLE_NAME)
         
 
 # qcat only accept ungzip file
@@ -120,8 +119,8 @@ rule bam_to_bed:
     input:
         'aligned_data/{sample_name}.tagged.mm2.sorted.bam'
     output:
-        bed = 'transitional/{sample_name}.tagged.mm2.sorted.bed',
-        split_bed = 'transitional/{sample_name}.tagged.mm2.sorted.split.bed'
+        bed = 'splicing_isoforms/{sample_name}.tagged.mm2.sorted.bed',
+        split_bed = 'splicing_isoforms/{sample_name}.tagged.mm2.sorted.split.bed'
     threads: 1
     shell:
         '''
@@ -273,12 +272,13 @@ rule combine_chr_lists:
         python script/combine_chr_lists.py --positive {input.positive} --negative {input.negative} --outfile {output}
         '''
 
+
 # Finding splicing isoforms
 rule find_splice_sites:
     input:
-        'transitional/{sample_name}.tagged.mm2.sorted.split.bed'
+        'splicing_isoforms/{sample_name}.tagged.mm2.sorted.split.bed'
     output:
-        'transitional/{sample_name}.raw_splice_sites.tsv'
+        'splicing_isoforms/{sample_name}.spliced.tsv'
     threads: 1
     shell:
         '''
@@ -286,66 +286,50 @@ rule find_splice_sites:
         '''
 
 
-rule filter_by_coverage:
+rule find_intronless_transcripts:
     input:
-        raw_splice_sites = 'transitional/{sample_name}.raw_splice_sites.tsv',
-        coverage_file = 'transitional/{sample_name}.total_coverage.tsv'
+        'splicing_isoforms/{sample_name}.tagged.mm2.sorted.split.bed'
     output:
-        'transitional/{sample_name}.coverage_filtered_splice_sites.tsv'
-    params:
-        max_cov=100
+        'splicing_isoforms/{sample_name}.intronless.tsv'
     threads: 1
     shell:
         '''
-        python script/filter_by_coverage.py \
-            --raw_splice_sites {input.raw_splice_sites} \
-            --coverage_file {input.coverage_file} \
-            --filtered_splice_sites {output}
-        '''
-        
-
-rule filter_by_genome:
-    input:
-        raw_isoform_file = 'transitional/{sample_name}.coverage_filtered_splice_sites.tsv',
-        genome = config['genome']
-    output:
-        'transitional/{sample_name}.genome_filtered_splice_sites.tsv'
-    params:
-        max_polya_length = 8,
-        min_exon_length = 50,  # TODO 是否需要调节
-        max_single_base_to_length_ratio = 0.7
-    threads: 1
-    shell:
-        '''
-        python script/filter_by_genome.py \
-            --raw_isoform_file {input.raw_isoform_file} \
-            --genome_file {input.genome} \
-            --filtered_isoform_file {output}
-        '''
-        
-
-rule find_best_isoform:
-    input:
-        'transitional/{sample_name}.genome_filtered_splice_sites.tsv'
-    output:
-        'transitional/{sample_name}.unique_filtered_splice_sites.tsv'
-    params:
-        max_splice_difference = 10
-    threads: 1
-    shell:
-        '''
-        python script/find_best_isoform.py --infile {input} --outfile {output}
+        python script/find_intronless_transcripts.py --infile {input} --outfile {output}
         '''
 
 
 # Translating to bed format for the final results
 rule convert_isoforms_to_bed:
     input:
-        'transitional/{sample_name}.{type}_filtered_splice_sites.tsv'
+        'splicing_isoforms/{sample_name}.{type}.tsv'
     output:
-        'transitional/{sample_name}.{type}_splicing_isoforms.bed'
+        'splicing_isoforms/{sample_name}.{type}.bed'
     threads: 1
     shell:
         '''
         python script/convert_isoforms_to_bed.py --infile {input} --outfile {output}
+        '''
+
+
+rule get_full_length_isoform:
+    input:
+        'splicing_isoforms/{sample_name}.{type}.bed'
+    output:
+        'splicing_isoforms/{sample_name}.{type}.full_length.bed'
+    threads: 1
+    shell:
+        '''
+        bedtools intersect -a {input} -b supplementary_data/representative_exon/representative_gene_first_exon.bed -wa -s > {output}
+        '''
+
+rule merge_bedfile:
+    input:
+        spliced = 'splicing_isoforms/{sample_name}.spliced.full_length.bed',
+        intronless = 'splicing_isoforms/{sample_name}.intronless.full_length.bed'
+    output:
+        'splicing_isoforms/{sample_name}.full_length_isoform.bed'
+    threads: 1
+    shell:
+        '''
+        cat {input.spliced} {input.intronless} | bedtools sort -i - > {output}
         '''
