@@ -3,12 +3,18 @@
 '''
 @Author       : windz
 @Date         : 2020-04-22 11:36:06
-@LastEditTime : 2020-04-22 13:17:52
+@LastEditTime : 2020-04-23 14:45:55
 @Description  : Writes a bed file from a file containing isoforms
 '''
 
 
 import click
+
+
+itemRgb = {
+    '+': '235,175,175',
+    '-': '175,175,235'
+}
 
 
 @click.command()
@@ -22,13 +28,12 @@ def convert_isoforms_to_bed(infile, outfile):
             start = parts[1]
             end = parts[2]
             strand = parts[3]
-            score = parts[4]
-            # readCount=parts[3]
+            score = parts[4]  # read count support
             spliceSites = parts[5].split(',')
             # for intronless isoform
             if len(spliceSites) < 2:
                 outFile.write(f'{chro}\t{start}\t{end}\tisoform_{count}\t{score}\t{strand}\t{start}\t{end}\t'
-                              f'0\1\t{int(end)-int(start)}\t0\n')
+                              f'0\t1\t{int(end)-int(start)}\t0\n')
                 continue
             #Translate the splice sites into exons
             exons = []
@@ -50,7 +55,7 @@ def convert_isoforms_to_bed(infile, outfile):
                 blockStarts += f'{exon[0]-int(start)},'
 
             outFile.write(f'{chro}\t{start}\t{end}\tisoform_{count}\t{score}\t{strand}\t{start}\t{end}\t'
-                          f'0\t{len(exon)}\t{blockSizes}\t{blockStarts}\n')
+                          f'{itemRgb[strand]}\t{len(exon)}\t{blockSizes}\t{blockStarts}\n')
 
 
 if __name__ == "__main__":
