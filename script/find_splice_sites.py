@@ -3,15 +3,22 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 17:26:26
-@LastEditTime : 2020-04-23 10:51:26
+@LastEditTime : 2020-04-23 11:33:08
 @Description  : Find splice sites in a bed file created with the -split option
 '''
 
 
-import logging
 from collections import namedtuple
 import numpy as np
 import click
+
+
+import logging
+logging.basicConfig(level=logging.DEBUG,  
+                    format='%(asctime)s %(filename)s: %(message)s',  
+                    datefmt='%m/%d/%Y %I:%M:%S %p',  
+                    filename='find_splice_sites.log',  
+                    filemode='w')
 
 
 Isoform = namedtuple('Isoform', 'chro start end strand count spliced_sites read_id')
@@ -45,6 +52,7 @@ class Cluster:
         start, end = 0, 0
         read_id = []
         spliced_sites = None
+        # TODO 优化，储存前面结果，仅需要添加，不需要重新循环计算
         for count, transcript in enumerate(self.transcripts, 1):
             start += int(transcript[1])
             end += int(transcript[2])
@@ -65,13 +73,16 @@ class Cluster:
         return Isoform(chro, str(start), str(end), strand, str(count), spliced_sites, read_id)
     
     def in_cluster(self, transcript):
+        '''
+        判断transcript是否属于cluster
+        '''
+        # 忽略intronless transcript
         if transcript[3] != self.isoform.strand and transcript[4] == '':
             return False
-        # TODO 暂时忽略intronless transcript
-
         isoform_spliced_sites = np.fromstring(self.isoform.spliced_sites, sep=',', dtype=int)
         transcript_spliced_sites = np.fromstring(transcript[4], sep=',', dtype=int)
         if len(isoform_spliced_sites) == len(transcript_spliced_sites):
+            # spliced_site 相差不超过 max_difference
             res = (abs(isoform_spliced_sites - transcript_spliced_sites) < self.max_difference).all()
             return res
         else:
