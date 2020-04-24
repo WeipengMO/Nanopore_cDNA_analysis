@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-24 09:28:51
-@LastEditTime : 2020-04-24 22:28:28
+@LastEditTime : 2020-04-24 22:31:21
 @Description  : 
 '''
 
@@ -96,7 +96,7 @@ def parse_features(record, flanksize=500):
 
 def get_lengths_for_norm():
     feat_lengths = Counter()
-    with open(genes_bed) as bed:
+    with open() as bed:
         for record in bed:
             record = parse_features(record.split())
             if record['chrom'] in ['C', 'M']:
