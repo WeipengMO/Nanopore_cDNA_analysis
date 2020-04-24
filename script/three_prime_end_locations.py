@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-24 09:28:51
-@LastEditTime : 2020-04-24 10:57:12
+@LastEditTime : 2020-04-24 22:28:28
 @Description  : 
 '''
 
@@ -237,6 +237,9 @@ def parse_pysam_aln(aln, max_allowed_insertion):
 
 
 def assign_three_prime_to_feature(three_prime_end, bed_record):
+    '''
+    判断3'site位于该representative gene model的哪个区间
+    '''
     if bed_record['strand'] == '+' and three_prime_end >= bed_record['invs']['exons'][-1][1]:
         return 'downstream'
     elif bed_record['strand'] == '-' and three_prime_end < bed_record['invs']['exons'][0][0]:
@@ -275,7 +278,7 @@ def count_three_prime_ends_in_features(annotation_bed_fn, bam_fns):
                 # overlap rate > 0.2
                 if i / aln_len > 0.2:
                     tpe = aln.start if aln.strand == '-' else aln.end
-                    # 3'sites count += 1
+                    # 3'sites position count += 1
                     gene_tpe[tpe] += 1
             # 💡 遍历上述筛选过的3'site
             for tpe, count in gene_tpe.items():
