@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 17:26:26
-@LastEditTime : 2020-04-23 14:53:43
+@LastEditTime : 2020-04-25 13:52:06
 @Description  : Find splice sites in a bed file created with the -split option
 '''
 
@@ -34,6 +34,7 @@ class Cluster:
         __max_difference: max difference between sites
     '''
     def __init__(self, transcript):
+        # TODO 将均值换成密度
         self.__chro = transcript[0]
         self.__start = int(transcript[1])
         self.__end = int(transcript[2])
