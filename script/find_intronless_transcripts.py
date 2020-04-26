@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-17 17:26:26
-@LastEditTime : 2020-04-23 19:17:57
+@LastEditTime : 2020-04-26 11:52:15
 @Description  : Find intronless transcript in a bed file created with the -split option
 '''
 
@@ -54,20 +54,18 @@ class Cluster:
         '''Determine if the transcript belong to cluster
         '''
         # only intronless transcript
-        if transcript[3] != self.__strand and transcript[4] != '':
+        if transcript[3] != self.__strand or transcript[4] != '':
             return False
 
-        start = np.array(self.__start)
-        end = np.array(self.__end)
+        start = min(self.__start)
+        end = max(self.__end)
         transcript_start = int(transcript[1])
         transcript_end = int(transcript[2])
         
-        #if ((abs(start-transcript_start) < self.__max_difference).any()
-        #    and (abs(end-transcript_end) < self.__max_difference).any()):
-        #  transcript 3'site within max_difference of the cluster
-        #  只考虑3'sites, 因为5'sites不准确
-        if ((self.__strand == '-' and (abs(start-transcript_start) < self.__max_difference).any())
-            or (self.__strand == '+' and (abs(end-transcript_end) < self.__max_difference).any())):
+        # 有overlap，且overlap部分大于0.5
+        if ((transcript_start < end and transcript_end > start) and 
+            (min(transcript_end, end)-max(transcript_start, start)/(transcript_end-transcript_start) > .5)
+            ):
             return True
         else:
             return False
@@ -76,8 +74,19 @@ class Cluster:
         '''Return isoform info of the cluster
         '''
         chro = self.__chro
+        '''
+        众数
         start = str(stats.mode(self.__start)[0][0])
         end = str(stats.mode(self.__end)[0][0])
+        '''
+        # 3'end 取中位数，5’end 取最长(可优化📌)， 由于5'end 不准
+        if self.__strand == '+':
+            start = str(min(self.__start))
+            end = str(int(round(np.median(self.__end))))
+        else:
+            end = str(max(self.__end))
+            start = str(int(round(np.median(self.__start))))
+        
         strand = self.__strand
         count = str(self.__count)
         spliced_sites = ''
