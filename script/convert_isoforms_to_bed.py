@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-04-22 11:36:06
-@LastEditTime : 2020-04-23 19:30:41
+@LastEditTime : 2020-04-26 13:40:16
 @Description  : Writes a bed file from a file containing isoforms
 '''
 
@@ -36,7 +36,7 @@ def convert_isoforms_to_bed(infile, outfile):
                 # count要大于10才输出
                 if int(score) >= 10:
                     outFile.write(f'{chro}\t{start}\t{end}\tintronless_{count}\t{score}\t{strand}\t{start}\t{end}\t'
-                                  f'{itemRgb[strand]}\t1\t{int(end)-int(start)}\t0\n')
+                                  f'{itemRgb[strand]}\t1\t{int(end)-int(start)},\t0,\n')
                 continue
             #Translate the splice sites into exons
             exons = []
@@ -58,7 +58,7 @@ def convert_isoforms_to_bed(infile, outfile):
                 blockStarts += f'{exon[0]-int(start)},'
 
             outFile.write(f'{chro}\t{start}\t{end}\tspliced_{count}\t{score}\t{strand}\t{start}\t{end}\t'
-                          f'{itemRgb[strand]}\t{len(exon)}\t{blockSizes}\t{blockStarts}\n')
+                          f'{itemRgb[strand]}\t{len(exons)}\t{blockSizes}\t{blockStarts}\n')
 
 
 if __name__ == "__main__":
