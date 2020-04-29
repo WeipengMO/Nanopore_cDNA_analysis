@@ -59,14 +59,15 @@ rule qcat_trim:
 # Adjust read strandedness and polya filter
 rule adjust_strandedness:
     input:
-        fastq='trim_data/{sample_name}.qcat.fastq.gz',
-        polya_file=config['polya_data']
+        'trim_data/{sample_name}.qcat.fastq.gz',
     output:
         'trim_data/{sample_name}.adjust.fastq.gz'
     threads: 1
+    params:
+        polya_file=config['polya_data']
     shell:
         '''
-        python script/adjust_strandedness.py -i {input.fastq} -o {output} -p {input.polya_file}
+        python script/adjust_strandedness.py -i {input} -o {output} -p {params}
         '''
 
 
@@ -93,13 +94,15 @@ rule add_tags:
     input:
         infile='aligned_data/{sample_name}.adjust.mm2.sorted.bam',
         polya_file=config['polya_data'],
-        gff_file=config['gff_file'],
+        
     output:
         'aligned_data/{sample_name}.tagged.mm2.sorted.bam'
     threads: 1
+    params:
+        config['bed_file']
     shell:
         '''
-        python script/add_tag_to_bam.py -i {input.infile} -o {output} -p {input.polya_file} -g {input.gff_file}
+        python script/add_tag_to_bam.py -i {input.infile} -o {output} -p {input.polya_file} --bed_file {params}
         samtools index {output}
         '''
         
@@ -337,9 +340,12 @@ rule get_full_length_isoform:
     output:
         'splicing_isoforms/{sample_name}.{type}.full_length.bed'
     threads: 1
+    params:
+        # ❗ 此处未写进配置文件
+        'supplementary_data/get_representative_gene_model/representative_gene_first_exon.bed'
     shell:
         '''
-        bedtools intersect -a {input} -b supplementary_data/representative_exon/representative_gene_first_exon.bed -wa -s > {output}
+        bedtools intersect -a {input} -b {params} -wa -s > {output}
         '''
 
 rule merge_bedfile:
@@ -351,5 +357,10 @@ rule merge_bedfile:
     threads: 1
     shell:
         '''
-        cat {input.spliced} {input.intronless} | bedtools sort -i - > {output}
+        cat {input.spliced} {input.intronless} | bedtools sort -i - | uniq - > {output}
         '''
+
+
+'''
+bedtools getfasta -fi ~/db/Arabidopsis_thaliana/dna/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa -name -s -split -bed isoseq.full_length_isoform.bed
+'''
