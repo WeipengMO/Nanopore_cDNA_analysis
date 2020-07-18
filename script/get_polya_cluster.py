@@ -3,99 +3,30 @@
 '''
 @Author       : windz
 @Date         : 2020-05-24 19:07:01
-@LastEditTime : 2020-07-11 19:05:12
+@LastEditTime : 2020-07-18 16:35:09
 @Description  : 
 '''
 
 
-import pickle
-from collections import defaultdict, OrderedDict
-import numpy as np
+from collections import Counter, defaultdict
 import pysam
-from scipy import stats
 import click
 import pyranges as pr
+from concurrent.futures import ProcessPoolExecutor
 
 
-class Polya_Cluster:
-    def __init__(self, polya_sites, gene_id, chrom, is_reverse):
-        polya_sites.sort()
-        self.polya_sites = np.array(polya_sites)
-        self.gene_id = gene_id
-        self.chrom = chrom
-        self.strand = '-' if is_reverse else '+'
-        self.pac_list = None
-        self._get_pac()
-
-    def _get_pac(self):
-        # 将24nt以内的点合并
-        for polya_site in self.polya_sites:
-            if self.pac_list is None:
-                self.pac_list = [[polya_site]]
-            else:
-                if polya_site-self.pac_list[-1][-1] <= 24:
-                    self.pac_list[-1].append(polya_site)
-                else:
-                    self.pac_list.append([polya_site])
-        # 去除read数少于3的pac
-        for i in range(len(self.pac_list)-1, -1, -1):
-            if len(self.pac_list[i]) < 3:
-                self.pac_list.pop(i)
-        # 计算pac的poly(A) site,
-        # a cluster supported by the greatest number
-        major = float('-inf')
-        self.polya_cluster = []
-        self.polya_cluster_summit = []
-        for n, pac in enumerate(self.pac_list, 1):
-            start = pac[0]
-            end = pac[-1]
-            summit = stats.mode(pac)[0][0]
-            self.polya_cluster.append(f'{self.chrom}\t{start-1}\t{end}\t{self.gene_id}_{n}\t{len(pac)}\t{self.strand}')
-            self.polya_cluster_summit.append(f'{self.chrom}\t{summit-1}\t{summit}\t{self.gene_id}_{n}\t.\t{self.strand}')
-            if len(pac) > major:
-                major = len(pac)
-                self.major_pac = f'{self.chrom}\t{start-1}\t{end}\t{self.gene_id}\t{major}\t{self.strand}'
-                self.major_summit = f'{self.chrom}\t{summit-1}\t{summit}\t{self.gene_id}\t.\t{self.strand}'
-
-        if len(self.polya_cluster) >= 1:
-            if self.strand == '+':
-                self.last_pac = self.polya_cluster[-1]
-                self.last_pac_summit = self.polya_cluster_summit[-1]
-            else:
-                self.last_pac = self.polya_cluster[-0]
-                self.last_pac_summit = self.polya_cluster_summit[-0]
-            
-            self.polya_cluster = '\n'.join(self.polya_cluster)
-            self.polya_cluster_summit = '\n'.join(self.polya_cluster_summit)
-        else:
-            self.polya_cluster = None
-            self.polya_cluster_summit = None
-            self.major_pac = None
-            self.major_summit = None
-            self.last_pac = None
-            self.last_pac_summit = None
+STRAND_TO_BOOL = {'-': True, '+': False}
 
 
-@click.command()
-@click.option('--infile', required=True)
-@click.option('--gene_bed', required=True)
-@click.option('--out_suffix', required=True)
-def main(infile, gene_bed, out_suffix):
-
-    # 1️⃣ 读取gene_bed信息
-    gene_bed = pr.read_bed(gene_bed, as_df=True)
-
-    # 2️⃣ 按照gene遍历bam文件，获取每个基因的pA site
-    STRAND_TO_BOOL = {'-': True, '+': False}
-    gene_polya_site = defaultdict(lambda: [])
-    gene_info = OrderedDict()
-    inbam = pysam.AlignmentFile(infile, 'rb')
-    for item in gene_bed.itertuples():
-        _, chrom, start, end, gene_id, _, strand = item
-        strand = STRAND_TO_BOOL[strand]
-        if chrom in {'Mt', 'Pt'}:
-            continue
-        read_count = 0
+def get_three_end(infile, gene_id, gene_model):
+    '''
+    获取polyadenylated read 3’end 位置
+    '''
+    chrom, start, end, _, strand = gene_model.loc[gene_id, :].values
+    strand = STRAND_TO_BOOL[strand]
+    read_count = 0
+    polya_sites = []
+    with pysam.AlignmentFile(infile, 'rb') as inbam:
         for read in inbam.fetch(chrom, start, end):
             # 取该位置上与基因方向一致的reads
             if strand is read.is_reverse:
@@ -104,37 +35,125 @@ def main(infile, gene_bed, out_suffix):
                 if polya_len >= 15 and read_gene_id in {'None', gene_id}:
                     read_count += 1
                     if not read.is_reverse:
-                        gene_polya_site[gene_id].append(read.reference_end)
+                        polya_sites.append(read.reference_end)
                     else:
-                        gene_polya_site[gene_id].append(read.reference_start)
-        if read_count >= 5:
-            gene_info[gene_id] = (chrom, strand)
-
-    inbam.close()
-
-    polya_cluster = open(f'{out_suffix}.polya_cluster.bed', 'w')
-    polya_cluster_summit = open(f'{out_suffix}.polya_cluster.summit.bed', 'w')
-    major_polya_cluster = open(f'{out_suffix}.major_polya_cluster.bed', 'w')
-    major_polya_cluster_summit = open(f'{out_suffix}.major_polya_cluster_summit.bed', 'w')
-    last_polya_cluster = open(f'{out_suffix}.last_polya_cluster.bed', 'w')
-    last_polya_cluster_summit = open(f'{out_suffix}.last_polya_cluster_summit.bed', 'w')
-    for gene_id in gene_info:
-        pac = Polya_Cluster(gene_polya_site[gene_id], gene_id, *gene_info[gene_id])
-        if pac.polya_cluster is not None and pac.major_pac is not None:
-            polya_cluster.write(pac.polya_cluster+'\n')
-            polya_cluster_summit.write(pac.polya_cluster_summit+'\n')
-            major_polya_cluster.write(pac.major_pac+'\n')
-            major_polya_cluster_summit.write(pac.major_summit+'\n')
-            last_polya_cluster.write(pac.last_pac+'\n')
-            last_polya_cluster_summit.write(pac.last_pac_summit+'\n')
+                        polya_sites.append(read.reference_start*-1)
     
-    polya_cluster.close()
-    polya_cluster_summit.close()
-    major_polya_cluster.close()
-    major_polya_cluster_summit.close()
-    last_polya_cluster.close()
-    last_polya_cluster_summit.close()
+    # 选择表达量高的基因
+    if read_count < 10:
+        return None
+    
+    polya_sites.sort()
+    
+    # 将24nt以内的点合并
+    total_site_count = len(polya_sites)
+    pac_list = None
+    for polya_site in polya_sites:
+        if pac_list is None:
+            pac_list = [[polya_site]]
+        else:
+            if polya_site-pac_list[-1][-1] <= 24:
+                pac_list[-1].append(polya_site)
+            else:
+                pac_list.append([polya_site])
+
+    # 去除read数少于3的pac
+    # 去除read比例少于基因区总read数1%的pac
+    major_cluster_site_count = 0
+    summit = []
+
+    polya_cluster = []
+    polya_cluster_summit = []
+
+    polya_cluster_major = ''
+    polya_cluster_summit_major = ''
+
+    polya_cluster_last = ''
+    polya_cluster_summit_last = ''
+
+    *_, strand = gene_model.loc[gene_id, :].values
+    n = 0
+    for pac in pac_list:
+        # 去除read数少于3的pac
+        # 去除read比例少于基因区总read数1%的pac
+        if len(pac) < 3 or len(pac)/total_site_count < .1:
+            continue
+
+        site_counter = Counter(pac)
+        site_counter_most = site_counter.most_common(3)
+
+        if site_counter_most[0][1] >= 3:
+            n += 1
+            start = min(abs(pac[0]), abs(pac[-1]))
+            end = max(abs(pac[0]), abs(pac[-1]))
+            polya_cluster.append(f'{chrom}\t{start-1}\t{end}\t{gene_id}_{n}\t{len(pac)}\t{strand}\n')
+
+            # 计算cluster的峰值
+            summit = abs(site_counter_most[0][0])
+            # 最后一列为summit与pac中所有counts的比值
+            # 比值越高，summit越显著
+            polya_cluster_summit.append(f'{chrom}\t{summit-1}\t{summit}\t{gene_id}_{n}\t{site_counter_most[0][1]}\t{strand}\t{site_counter_most[0][1]/len(pac):.3f}\n')
+
+            if major_cluster_site_count < len(pac):
+                major_cluster_site_count = len(pac)
+                polya_cluster_major = polya_cluster[-1]
+                polya_cluster_summit_major = polya_cluster_summit[-1]
+    
+    if len(polya_cluster) == 0:
+        return None
+    
+    polya_cluster_last = polya_cluster[-1]
+    polya_cluster_summit_last = polya_cluster_summit[-1]
+    
+    return polya_cluster, polya_cluster_summit, polya_cluster_major, polya_cluster_summit_major, polya_cluster_last, polya_cluster_summit_last
+
+
+@click.command()
+@click.option('--infile', required=True)
+@click.option('--gene_bed', required=True)
+@click.option('--out_suffix', required=True)
+@click.option('-t', '--threads', required=False, default=10)
+def main(infile, gene_bed, out_suffix, threads):
+    # 读取gene_bed信息
+    gene_model = pr.read_bed(gene_bed, as_df=True)
+    gene_model = gene_model.set_index(['Name'])
+
+    results = []
+    with ProcessPoolExecutor(max_workers=threads) as e:
+        for gene_id in gene_model.index:
+            if gene_model.at[gene_id, 'Chromosome'] not in {'Mt', 'Pt'}:
+                results.append(e.submit(get_three_end, infile, gene_id, gene_model))
+    
+
+    o_polya_cluster = open(f'{out_suffix}.polya_cluster.bed', 'w')
+    o_polya_cluster_summit = open(f'{out_suffix}.polya_cluster.summit.bed', 'w')
+    o_major_polya_cluster = open(f'{out_suffix}.major_polya_cluster.bed', 'w')
+    o_major_polya_cluster_summit = open(f'{out_suffix}.major_polya_cluster_summit.bed', 'w')
+    o_last_polya_cluster = open(f'{out_suffix}.last_polya_cluster.bed', 'w')
+    o_last_polya_cluster_summit = open(f'{out_suffix}.last_polya_cluster_summit.bed', 'w')
+
+    for res in results:
+        result = res.result()
+        if result is not None:
+            polya_cluster, polya_cluster_summit, polya_cluster_major, polya_cluster_summit_major, polya_cluster_last, polya_cluster_summit_last = result
+            for item in polya_cluster:
+                o_polya_cluster.write(item)
+            for item in polya_cluster_summit:
+                o_polya_cluster_summit.write(item)
+                
+            o_major_polya_cluster.write(polya_cluster_major)
+            o_major_polya_cluster_summit.write(polya_cluster_summit_major)
+            o_last_polya_cluster.write(polya_cluster_last)
+            o_last_polya_cluster_summit.write(polya_cluster_summit_last)
+            
+    o_polya_cluster.close()
+    o_polya_cluster_summit.close()
+    o_major_polya_cluster.close()
+    o_major_polya_cluster_summit.close()
+    o_last_polya_cluster.close()
+    o_last_polya_cluster_summit.close()
 
 
 if __name__ == "__main__":
     main()
+    
