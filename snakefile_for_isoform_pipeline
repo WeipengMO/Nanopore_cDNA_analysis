@@ -10,116 +10,167 @@ import glob
 configfile: 'config.yml'
 
 
-SAMPLE_NAME = [os.path.basename(path).replace('.fastq.gz', '') for path in glob.glob('basecalled_data/*.fastq.gz')]
+SAMPLE_NAME = os.path.basename(os.getcwd())
 STRAND = ['positive', 'negative']
 TYPE = ['spliced', 'intronless']
 
 
 rule all:
     input:
-        # full_length transcript:
-        expand('full_length_transcripts/{sample_name}.full_length.sorted.bam', sample_name=SAMPLE_NAME),
-        expand('full_length_transcripts/{sample_name}.non_full_length.sorted.bam', sample_name=SAMPLE_NAME),
-        # gene list
-        expand('gene_list/{sample_name}.full_genelist.bed', sample_name=SAMPLE_NAME),
-        # isoform
-        expand('splicing_isoforms/{sample_name}.full_length_isoform.bed', sample_name=SAMPLE_NAME)
-
+        expand('full_len/{sample_name}.adjust.sorted.polii.tagged.full_len.bam', sample_name=SAMPLE_NAME),
+        expand('full_len/{sample_name}.full_len.bed.splice_stats.tsv', sample_name=SAMPLE_NAME),
+        expand('polya_sites/{sample_name}.polya_cluster.bed', sample_name=SAMPLE_NAME)
 
 #######################################
 # Pre-process
 #######################################
 
-# qcat only accept ungzip file
-rule decompress:
-    input:
-        'basecalled_data/{sample_name}.fastq.gz'
-    output:
-        temp('aligned_data/{sample_name}.fastq')
-    threads: 20
-    shell:
-        '''
-        pigz -p {threads} -cd {input} > {output}
-        '''
 
-
-# Remove adapter from reads.
-# Search for adapters in the whole read
-rule qcat_trim:
-    input:
-        'aligned_data/{sample_name}.fastq'
-    output:
-        'trim_data/{sample_name}.qcat.fastq.gz'
-    threads: 1
-    shell:
-        '''
-        qcat -f {input} -o {output} -t {threads} --trim --detect-middle
-        '''
-        
-# Adjust read strandedness and polya filter
+# Adjust read strandedness and 3'adapter filter
 rule adjust_strandedness:
     input:
-        'trim_data/{sample_name}.qcat.fastq.gz',
+        'basecalled_data/{sample_name}.fastq.gz',
     output:
-        'trim_data/{sample_name}.adjust.fastq.gz'
+        'basecalled_data/{sample_name}.adjust.fastq.gz'
     threads: 1
     params:
         polya_file=config['polya_data']
     shell:
         '''
-        python script/adjust_strandedness.py -i {input} -o {output} -p {params}
+python script/adjust_strandedness.py -i {input} -o {output} -p {params}
         '''
 
 
-rule minimap2_mapping:
+rule minimap2_map_genome:
     input:
-        reads='trim_data/{sample_name}.adjust.fastq.gz',
-        ref=config['genome']
+        reads='basecalled_data/{sample_name}.adjust.fastq.gz',
+        ref=config['genome'],
+        bed=config['ann_bed']
     output:
-        temp_bam=temp('aligned_data/{sample_name}.adjust.tmp.bam'),
-        bam='aligned_data/{sample_name}.adjust.mm2.sorted.bam'
-    threads: 64
+        bam='aligned_data/{sample_name}.adjust.sorted.bam'
+    threads: 32
     shell:
         '''
-        minimap2 -t {threads} -ax splice -ub -k14 -G 10000 \
-            --secondary=no --cs {input.ref} {input.reads} \
-            | samtools view -Sb - > {output.temp_bam}
-        samtools sort -@ {threads} -o {output.bam} {output.temp_bam}
-        samtools index {output.bam}
+minimap2 -t {threads} -ax splice -G 10000 --secondary=no --cs \
+--junc-bed {input.bed} --sam-hit-only {input.ref} {input.reads} \
+| samtools sort -@ {threads} -O bam -o {output.bam} -
+samtools index -@10 {output.bam}
+        '''
+
+
+rule keep_polii_transcripts:
+    input:
+        'aligned_data/{sample_name}.adjust.sorted.bam'
+    output:
+        'aligned_data/{sample_name}.adjust.sorted.polii.bam'
+    threads: 1
+    params:
+        config['excludable_region']
+    shell:
+        '''
+bedtools intersect -v -abam {input} -b {params} > {output}
+samtools index -@10 {output}
+        '''
+
+
+rule bedtools_intersect:
+    input:
+        'aligned_data/{sample_name}.adjust.sorted.polii.bam'
+    output:
+        'aligned_data/{sample_name}.adjust.sorted.polii.bed.intersect'
+    threads: 1
+    params:
+        config['ann_bed']
+    shell:
+        '''
+bedtools intersect -abam {input} -b {params} -wo -s -split -bed > {output}
+        '''
+
+
+rule parse_bedtools_output:
+    input:
+        'aligned_data/{sample_name}.adjust.sorted.polii.bed.intersect'
+    output:
+        'aligned_data/{sample_name}.adjust.sorted.polii.bed.pkl'
+    threads: 1
+    shell:
+        '''
+python script/parse_bedtools_output.py -i {input} -o {output}
         '''
 
 
 # add polya length and gene_id to bam tags
-rule add_tags:
+rule add_tags_to_bam:
     input:
-        infile='aligned_data/{sample_name}.adjust.mm2.sorted.bam',
-        polya_file=config['polya_data'],
-        
+        infile='aligned_data/{sample_name}.adjust.sorted.polii.bam',
+        bed_intersect='aligned_data/{sample_name}.adjust.sorted.polii.bed.pkl'
     output:
-        'aligned_data/{sample_name}.tagged.mm2.sorted.bam'
-    threads: 1
+        'aligned_data/{sample_name}.adjust.sorted.polii.tagged.bam'
     params:
-        config['bed_file']
+        config['polya_data']
+    threads: 1
     shell:
         '''
-        python script/add_tag_to_bam.py -i {input.infile} -o {output} -p {input.polya_file} --bed_file {params}
-        samtools index {output}
+python script/add_tag_to_bam.py -i {input.infile} -o {output} --read_info {params} --bed_intersect {input.bed_intersect}
+samtools index -@10 {output}
+        '''
+
+
+rule get_full_len_transcripts:
+    input:
+        'aligned_data/{sample_name}.adjust.sorted.polii.tagged.bam'
+    output:
+        'full_len/{sample_name}.adjust.sorted.polii.tagged.full_len.bam'
+    threads: 1
+    params:
+        first_exon_path='/public/home/mowp/db/Arabidopsis_thaliana/representative_gene_model/representative_gene_first_exon.bed'
+    shell:
+        '''
+python script/remove_five_prime_lost.py -i {input} -o {output} --first_exon_path {params.first_exon_path}
+sleep 20
+samtools index -@ 16 {output}
+        '''
+
+
+rule bedtools_intersect_for_spliced:
+    input:
+        'full_len/{sample_name}.adjust.sorted.polii.tagged.full_len.bam'
+    output:
+        'full_len/{sample_name}.adjust.sorted.polii.tagged.full_len.bed.intersect'
+    params:
+        repr_bed='~/db/Arabidopsis_thaliana/representative_gene_model/araport11.representative.gene_model.bed'
+    shell:
+        '''
+bedtools intersect -abam {input} -b {params.repr_bed} -wo -s -split -bed > {output}
+        '''
+
+
+rule get_splice_stats:
+    input:
+        'full_len/{sample_name}.adjust.sorted.polii.tagged.full_len.bed.intersect'
+    output:
+        'full_len/{sample_name}.full_len.bed.splice_stats.tsv'
+    shell:
+        '''
+python script/get_splice_stats.py -i {input} -o {output}
         '''
         
 
-rule get_full_length_transcripts:
+rule get_polya_cluster:
     input:
-        infile='aligned_data/{sample_name}.tagged.mm2.sorted.bam',
-        first_exon_path = config['first_exon_path']
+        bam='aligned_data/{sample_name}.adjust.sorted.polii.tagged.bam',
     output:
-        full_len='full_length_transcripts/{sample_name}.full_length.sorted.bam',
-        non_full_len='full_length_transcripts/{sample_name}.non_full_length.sorted.bam'
+        'polya_sites/{sample_name}.polya_cluster.bed',
+        'polya_sites/{sample_name}.polya_cluster.summit.bed',
+        'polya_sites/{sample_name}.major_polya_cluster.bed',
+        'polya_sites/{sample_name}.major_polya_cluster_summit.bed'
+    params:
+        suffix='polya_sites/{sample_name}',
+        gene_bed=config['gene_bed']
     threads: 1
     shell:
         '''
-        python script/get_full_length_transcripts.py -i {input.infile} --full_len {output.full_len} --non_full_len {output.non_full_len} --first_exon_path {input.first_exon_path}
-        samtools index {output.full_len}
-        samtools index {output.non_full_len}
+python script/get_polya_cluster.py --infile {input.bam} --gene_bed {params.gene_bed} --out_suffix {params.suffix}
         '''
 
 #######################################
@@ -326,11 +377,13 @@ rule convert_isoforms_to_bed:
     input:
         'splicing_isoforms/{sample_name}.{type}.tsv'
     output:
-        'splicing_isoforms/{sample_name}.{type}.bed'
+        temp = temp('splicing_isoforms/{sample_name}.{type}.bed.tmp'),
+        bed = 'splicing_isoforms/{sample_name}.{type}.bed'
     threads: 1
     shell:
         '''
-        python script/convert_isoforms_to_bed.py --infile {input} --outfile {output}
+        bedtools sort -i {input} > {output.temp}
+        python script/convert_isoforms_to_bed.py --infile {output.temp} --outfile {output.bed}
         '''
 
 
@@ -361,6 +414,17 @@ rule merge_bedfile:
         '''
 
 
-'''
-bedtools getfasta -fi ~/db/Arabidopsis_thaliana/dna/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa -name -s -split -bed isoseq.full_length_isoform.bed
-'''
+rule get_fasta_from_isoform:
+    input:
+        'splicing_isoforms/{sample_name}.full_length_isoform.bed'
+    output:
+        'splicing_isoforms/{sample_name}.full_length_isoform.fasta'
+    params:
+        config['genome']
+    threads: 1
+    shell:
+        '''
+        bedtools getfasta -fi {params} -name -s -split -bed {input} > {output}.tmp
+        python script/parse_bedtofasta_output.py {output}.tmp > {output}
+        rm {output}.tmp
+        '''
