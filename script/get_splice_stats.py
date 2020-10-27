@@ -3,7 +3,7 @@
 '''
 @Author       : windz
 @Date         : 2020-07-06 18:15:02
-@LastEditTime : 2020-08-04 17:00:27
+LastEditTime : 2020-10-27 12:58:00
 @Description  : 
     Before using this script, 
     You should run bedtools intersect to get the input file
@@ -35,8 +35,8 @@ USECOLS = [
     'geneStart', 'geneEnd', 'geneName', 'geneBlockCount', 'geneBlockSizes', 'geneBlockStarts', 
     ]
 
-Splice_stats = namedtuple('Splice_stats', 'intron_total_count intron_count unsplice_count unsplice_intron')
-
+IR_stats = namedtuple('IR_stats', 'intron_total_count intron_count unsplice_count unsplice_intron')
+ES_stats = namedtuple('ES_stats', 'exon_total_count exon_count skipped_exon_count skipped_exon')
 
 def get_gene_info(item):
     '''
@@ -92,7 +92,7 @@ def is_overlap(block, intron):
         return False
     
     
-def get_splice_stats(blocks, introns):
+def get_IR_stats(blocks, introns):
     '''
     计算reads中没有剪切的intron个数
     返回:
@@ -134,10 +134,58 @@ def get_splice_stats(blocks, introns):
     return unsplice_count, intron_count, ','.join(unsplice_intron)
 
 
+def is_exon_overlap(block, exon):
+    '''
+    判断read的block与基因exon是否有overlap
+    '''
+    minn = max(block[0], exon[0])
+    maxn = min(block[1], exon[1])
+    if maxn-minn > 0:
+        return True
+    else:
+        return False
+
+
+def get_ES_stats(blocks, exons):
+    '''
+    计算reads中exon-skipped的情况
+    返回:
+        被剪切的exon个数
+        跨过的总exon个数
+    '''
+    blocks = iter(blocks)
+    exons = iter(exons)
+    
+    skipped_exon = []  # 用于储存剪切exon编号
+    
+    block_count, skipped_count, exon_number = 0, 0, 0
+    block = next(blocks)
+    block_count += 1
+    exon = next(exons)
+    exon_number += 1  # 当前exon序号
+
+    while True:
+        try:
+            if is_exon_overlap(block, exon):
+                exon = next(exons)
+                exon_number += 1
+            else:
+                if exon[1] < block[0]:
+                    skipped_count += 1
+                    skipped_exon.append(str(exon_number))
+                    exon = next(exons)
+                    exon_number += 1
+                else:
+                    block = next(blocks)
+        except StopIteration:
+            return exon_number, skipped_count, ','.join(skipped_exon)
+
+
 @click.command()
 @click.option('-i', '--infile', required=True)
-@click.option('-o', '--outfile', required=True)
-def main(infile, outfile):
+@click.option('--ir_out', required=True)
+@click.option('--es_out', required=True)
+def main(infile, ir_out, es_out):
     logging.info('Start load bedtools intersect result')
     df = pd.read_csv(
         infile, 
@@ -153,45 +201,73 @@ def main(infile, outfile):
     logging.info('Load bedtools intersect done!')
 
     logging.info('Main start')
-    splice_stats_dict = defaultdict(lambda: {}) # 储存结果用的，pkl格式
+    IR_stats_dict = defaultdict(lambda: {}) # 储存结果用的，pkl格式
+    ES_stats_dict = defaultdict(lambda: {}) # 储存结果用的，pkl格式
+
     gene_info = {} # key=gene_id, value = (exon, intron)
 
     n = 0
-    with open(outfile, 'w') as o:
-        o.write('gene_id\tintron_total_count\tread_id\tintron_count\tunsplice_count\tunsplice_intron\n')
+    with open(ir_out, 'w') as o_ir, open(es_out, 'w') as o_es:
+        o_ir.write('gene_id\tintron_total_count\tread_id\tintron_count\tunsplice_count\tunsplice_intron\n')
+        o_es.write('gene_id\texon_total_count\tread_id\texon_count\tskipped_exon_count\tskipped_exon\n')
         for item in df.itertuples():
             gene_id = item.geneName.split('.')[0]
             intron_total_count = item.geneBlockCount-1
+            exon_total_count = item.geneBlockCount
 
             # 跳过那些intronless的基因
             if intron_total_count == 0:
                 continue
+
             # 获取基因剪切情况
             if gene_id not in gene_info:
                 gene_info[gene_id] = get_gene_info(item)
-            introns = gene_info[gene_id][1]
+            exons, introns = gene_info[gene_id]
+
             # 获取read剪切情况
             blocks = get_read_info(item)
+            # with ProcessPoolExecutor(max_workers=2) as e:
+            #     ir_result = e.submit(get_IR_stats, blocks, introns)
+            #     ex_result = e.submit(get_ES_stats, blocks, exons)
+            # unsplice_count, intron_count, unsplice_intron = ir_result.result()
+            # exon_count, skipped_exon_count, skipped_exon = ex_result.result()
 
-            unsplice_count, intron_count, unsplice_intron = get_splice_stats(blocks, introns)
+            unsplice_count, intron_count, unsplice_intron = get_IR_stats(blocks, introns)
+            exon_count, skipped_exon_count, skipped_exon = get_ES_stats(blocks, exons)
+
+            # 输出到文件
+            o_ir.write(f'{item.geneName}\t{intron_total_count}\t{item.Name}\t{intron_count}\t{unsplice_count}\t{unsplice_intron}\n')
             '''
-            item.Name: read_id
-            unsplice_count: 未剪切intron个数
-            intron_count: read跨了多少个intron
-            intron_total_count: 代表性转录本的总intron个数
-            unsplice_intron: 未剪切转录本编号
-            item.geneName: 转录本号
+                item.Name: read_id
+                unsplice_count: 未剪切intron个数
+                intron_count: read跨了多少个intron
+                intron_total_count: 代表性转录本的总intron个数
+                unsplice_intron: 未剪切intron编号
+                item.geneName: 转录本号
             '''
-            o.write(f'{item.geneName}\t{intron_total_count}\t{item.Name}\t{intron_count}\t{unsplice_count}\t{unsplice_intron}\n')
+            o_es.write(f'{item.geneName}\t{exon_total_count}\t{item.Name}\t{exon_count}\t{skipped_exon_count}\t{skipped_exon}\n')
+            '''
+                item.Name: read_id
+                skipped_exon_count: 跳过的exon个数
+                exon_count: read跨了多少个exon
+                exon_total_count: 代表性转录本的总exon个数
+                skipped_exon: 跳过的exon编号
+                item.geneName: 转录本号
+            '''
+
             # 下游分析时候注意intron_count=0的reads，一般都要去除
-            splice_stats_dict[item.Name][gene_id] = Splice_stats(intron_total_count, intron_count, unsplice_count, unsplice_intron)
+            IR_stats_dict[item.Name][gene_id] = IR_stats(intron_total_count, intron_count, unsplice_count, unsplice_intron)
+            ES_stats_dict[item.Name][gene_id] = ES_stats(exon_total_count, exon_count, skipped_exon_count, skipped_exon)
             
             n += 1
             if n % 100000 == 0:
                 logging.info(f'Process {n} reads')
     
-    with open(outfile+'.pkl', 'wb') as o:
-        pickle.dump(dict(splice_stats_dict), o)
+    with open(ir_out+'.pkl', 'wb') as o:
+        pickle.dump(dict(IR_stats_dict), o)
+
+    with open(es_out+'.pkl', 'wb') as o:
+        pickle.dump(dict(ES_stats_dict), o)
 
 
 if __name__ == "__main__":
