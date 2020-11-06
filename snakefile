@@ -25,8 +25,8 @@ with open('basecalled_data/sample_name.txt', 'r') as f:
 rule all:
     input:
         expand('aligned_data/{sample_name}.adjust.sorted.tagged.bam', sample_name=SAMPLE_NAME),
-        expand('polyadenylated_data/{sample_name}.full_len.bed.splice_stats.tsv', sample_name=SAMPLE_NAME),
-        expand('polyadenylated_data/{sample_name}.full_len.bed.ir_stats.tsv', sample_name=SAMPLE_NAME)
+        expand('polyadenylated_data/{sample_name}.full_len.bed.ir_stats.tsv', sample_name=SAMPLE_NAME),
+        expand('polya_sites/{sample_name}.polya_cluster.bed', sample_name=SAMPLE_NAME)
 
 
 
@@ -118,6 +118,23 @@ python script/get_polyadenylated_reads.py -i {input} -o {output}
 samtools index -@20 {output}
         '''
 
+
+rule get_polya_cluster:
+    input:
+        bam='polyadenylated_data/{sample_name}.polyadenylated.bam'
+    output:
+        'polya_sites/{sample_name}.polya_cluster.bed',
+        'polya_sites/{sample_name}.polya_cluster.summit.bed',
+        'polya_sites/{sample_name}.major_polya_cluster.bed',
+        'polya_sites/{sample_name}.major_polya_cluster_summit.bed'
+    params:
+        suffix='polya_sites/{sample_name}',
+        gene_bed='/public/home/mowp/db/Arabidopsis_thaliana/isoform/araport11.gene.bed'
+    threads: 32
+    shell:
+        '''
+python script/get_polya_cluster.py --infile {input.bam} --gene_bed {params.gene_bed} --out_suffix {params.suffix} -t {threads}
+        '''
 
 rule get_full_len_transcripts:
     input:
