@@ -3,113 +3,198 @@
 '''
 @Author       : windz
 @Date         : 2020-04-14 10:46:37
-@LastEditTime : 2020-04-29 20:43:56
+LastEditTime : 2020-10-26 11:06:30
 @Description  : add polya length and remove wrong strandness reads
-@usage        : python add_tag_to_bam -i <in.bam> -o <out.bam> -g <genome.gff> -p <polya.tsv>
+                tags:
+                    'ga': distance between the start position of the 3’adapter 
+                          and the end position of the genome mapping region
+                    'pa': polya tail length
+                    'gi': gene_id
 '''
 
 
+import concurrent.futures
+import pickle
 import pysam
 import pandas as pd
 import numpy as np
 import click
 
 
-def parse_attribute(attr):
-    '''get gene_id from attribute
+import logging
+logging.basicConfig(level=logging.DEBUG,  
+                    format='%(asctime)s %(filename)s: %(message)s',  
+                    datefmt='%m/%d/%Y %I:%M:%S %p',
+                    )
+
+
+def load_read_info(read_info):
     '''
-    for item in attr.split(';'):
-        key, value = item.split('=')
-        if key == 'ID':
-            return value.replace('gene:', '')
+    load read info from polyaCaller result
 
-
-def get_gene_is_reverse_old(gff_path):
+    Return:
+        {'3da1bb92-be52-47c6-affd-5ef02febc17b': 
+            {"3'adapter_start": 69.0,
+            'tail_length': 0.99},
+        'dfdca161-7d81-4838-b7cb-6a96c47d6d2c': 
+            {"3'adapter_start": 551.0,
+            'tail_length': 0.76},
+        ...
+        }
     '''
-    Get gene strand info from gff file
+    logging.info('Load read info')
 
-    gene strand is '+' --> False
-    gene strand is '-' --> True
+    USE_COLS = ['read_id', 'read_type', 'mapped_start', 'mapped_end', '3\'adapter_start', 'tail_length']
+    df = pd.read_csv(read_info, sep='\t', index_col=['read_id'], usecols=USE_COLS)
 
-    Return a dict:
-        gene_is_reverse_dict[gend_id] --> True or False 
+    df['gap_size'] = float('nan')
+    df['polya'] = df["3'adapter_start"] - df['mapped_end']
+    df['polyt'] = df['mapped_start'] - df["3'adapter_start"] - 1
+    df.loc[df['read_type'] == 'polyA', 'gap_size'] = df['polya'] 
+    df.loc[df['read_type'] == 'polyT', 'gap_size'] = df['polyt'] 
+    read_info_dict = df.loc[:, ['tail_length', 'gap_size']].to_dict(orient='index')
+        
+    logging.info('Load read info done!')
+    return read_info_dict
+
+
+def get_intersect_info(bed_intersect):
+    logging.info('Load bed intersect info')
+    with open(bed_intersect, 'rb') as f:
+        intersect_info_dict = pickle.load(f)
+    logging.info('Load bed intersect info done!')
+    return intersect_info_dict
+
+
+def find_introns(r):
+    BAM_CREF_SKIP = 3 #BAM_CREF_SKIP
+    res = []
+    match_or_deletion = {0, 2, 7, 8} # only M/=/X (0/7/8) and D (2) are related to genome position
+    base_position = r.reference_start
+    for op, nt in r.cigartuples:
+        if op in match_or_deletion:
+            base_position += nt
+        elif op == BAM_CREF_SKIP:
+            junc_start = base_position
+            base_position += nt
+            res.append((junc_start, base_position))
+    return res
+
+
+def find_exons(r):
+    BAM_CREF_SKIP = 3 #BAM_CREF_SKIP
+    res = []
+    match_or_deletion = {0, 2, 7, 8} # only M/=/X (0/7/8) and D (2) are related to genome position
+    exon_start = r.reference_start
+    length = 0
+    for op, nt in r.cigartuples:
+        if op in match_or_deletion:
+            length += nt
+        elif op == BAM_CREF_SKIP:
+            res.append((exon_start, exon_start+length))
+            exon_start = res[-1][1]+nt
+            length = 0
+    res.append((exon_start, exon_start+length))
+    return res
+
+
+def is_exceed_extend(read, gene_len):
     '''
-    GFF_COLUMNS = ['seqid', 'source', 'type', 'start', 'end', 
-                   'score', 'strand', 'phase', 'attribute']
-    gff_df = pd.read_csv(gff_path, sep='\t', comment='#', names=GFF_COLUMNS)
-    # keep type = 'gene'
-    gff_df = gff_df[gff_df['type'].isin(['gene', 'ncRNA_gene'])]
-    # get gene_id
-    gff_df['gene_id'] = gff_df['attribute'].map(parse_attribute)
-    gff_df['is_reverse'] = gff_df['strand'].map(lambda x: False if x=='+' else True)
-    
-    return gff_df.set_index('gene_id')['is_reverse'].T.to_dict()
-
-
-def get_gene_is_reverse(bed_path):
-    araport11_isoform = pd.read_csv(
-        bed_path, sep='\t', 
-        names=['chrom', 'chromStart', 'chromEnd', 'name', 
-                'score', 'strand', 'thickStart', 'thickEnd', 
-                'itemRgb', 'blockCount', 'blockSizes', 'blockStarts']
-    )
-    araport11_isoform['gene_id'] = araport11_isoform['name'].map(lambda x: x.split('.')[0])
-    araport11_isoform['is_reverse'] = araport11_isoform['strand'].map(lambda x: False if x == '+' else True)
-    araport11_isoform = araport11_isoform.set_index('gene_id')
-    
-    return araport11_isoform['is_reverse'].to_dict()
-
-
-def load_polya_data(polya_data):
-    # polya_data = '/public/home/mowp/test/fast5_api/fhh.polyacaller.ann.tsv'
-    df = pd.read_csv(polya_data, sep='\t', index_col=0)
-
-    read_gene_id = df['gene_id'].to_dict()  # a dict like this: {'read_id': 'gene_id'}
-    read_tail_length = df['tail_length'].to_dict()  # a dict like this: {'read_id': 100.0}
-    return read_gene_id, read_tail_length
+    判断intron是否过长
+    如果该intron比所在基因还长
+    '''
+    introns = np.array(find_introns(read))
+    if len(introns) > 0:
+        intron_len = introns[:, 1] - introns[:, 0]
+        return (intron_len > gene_len).any()
+    else:
+        return False
 
 
 @click.command()
 @click.option('-i', '--infile', required=True)
 @click.option('-o', '--outfile', required=True)
-@click.option('-p', '--polya_file', required=True)
-@click.option('--bed_file', required=True)
-def main(infile, outfile, polya_file, bed_file):
-    #gff_file = '/public/home/mowp/db/Arabidopsis_thaliana/gff3/Arabidopsis_thaliana.TAIR10.46.gff3'
-    gene_is_reverse_dict = get_gene_is_reverse(bed_file)
+@click.option('--read_info', required=True)  # 提供polya长度和3'adapter信息
+@click.option('--bed_intersect', required=True)  # parse_bedtools_output的pickle_file
+def main(infile, outfile, read_info, bed_intersect):
+    logging.info('Waiting for all subprocesses done...')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as e:
+        read_info_dict = e.submit(load_read_info, read_info)
+        intersect_info_dict = e.submit(get_intersect_info, bed_intersect)
+    '''    
+    # polyaCaller信息
+    read_info:
+        polyacaller结果, 记录read 3'adapter, polya_len
+        key为read_id
 
-    #polya_file = '/public/home/mowp/test/fast5_api/fhh.polyacaller.ann.tsv'
-    # polya_file 只含有检测到polyA的reads
-    read_gene_id_dict, read_tail_length_dict = load_polya_data(polya_file)
+    # 基因注释的信息
+    intersect_info_dict:
+        {'669710e6-e0ef-45c2-a5ed-8c70bfe9facd': {
+            'cov': 311,
+            'is_splicing_intermediates': False,
+            'gene_len': 7705,
+            'gene_id': 'AT1G01040.2'},
+        ...}
+    '''
+    read_info_dict = read_info_dict.result()
+    intersect_info_dict = intersect_info_dict.result()
+    logging.info('All subprocesses done.')
 
-    #infile = '/public/home/mowp/test/nanopore_cdna/aligned_data/fhh.adjust.mm2.sorted.bam'
-    #outfile = '/public/home/mowp/test/nanopore_cdna/aligned_data/fhh.tagged.mm2.sorted.bam'
-    with pysam.AlignmentFile(infile, 'rb') as inbam, pysam.AlignmentFile(outfile, 'wb', template=inbam) as outbam:
-        # add tags: pa for polya_length
-        #           gi for gene_id
-        for read in inbam.fetch():
-            # only output mapped reads
-            if not read.is_unmapped:
-                if read.query_name in read_gene_id_dict:
-                    read_gene_id = read_gene_id_dict[read.query_name]  # 该read注释到的gene_id
-                    if str(read_gene_id) == 'nan':
-                        read_gene_id = 'None'  # 未被注释的基因，gene_id设置为：None
-                    read_tail_length = read_tail_length_dict[read.query_name]  # 该read的polyA长度
-                    
-                    out_read = False
-                    if read_gene_id != 'None':
-                        gene_is_reverse = gene_is_reverse_dict[read_gene_id]  # 获取基因正负链信息
-                        if gene_is_reverse is read.is_reverse:  # read比对方向与基因方向相同
-                            read.set_tag('gi', read_gene_id)
-                            read.set_tag('pa', read_tail_length)
-                            out_read = True
-                    else:  # 如果未被注释，直接输出，可能是新的转录本
-                        read.set_tag('gi', read_gene_id)
-                        read.set_tag('pa', read_tail_length)
-                        out_read = True
+    logging.info('Start main function')
+    inbam = pysam.AlignmentFile(infile, 'rb') 
+    outbam = pysam.AlignmentFile(outfile, 'wb', template=inbam)
 
-                    if out_read:  # only output tagged reads
-                        outbam.write(read)
+    for read in inbam:
+        if not read.is_unmapped \
+            and not read.is_supplementary \
+                and read.query_name in read_info_dict:
+            
+            # 获取read的polyA长度
+            read_tail_length = read_info_dict[read.query_name]['tail_length']
+
+            # 判断是否为剪切中间体
+            try:
+                if intersect_info_dict[read.query_name]['is_splicing_intermediates'] \
+                    and read_tail_length < 15:
+                    continue
+            except KeyError:
+                pass
+
+            # 判断intron是否由于比对错误导致过长的情况
+            try:
+                if is_exceed_extend(read, intersect_info_dict[read.query_name]['gene_len']):
+                    continue
+            except KeyError:
+                logging.info(f'read {read.query_name} not in bed intersect file')
+
+            # 获取gap长度
+            gap_size = read_info_dict[read.query_name]['gap_size']
+            
+            if gap_size < -1:
+                continue
+
+            # 过滤adapter找错情况，理论上gap长度就是polya长度
+            # 如果gap长度比polyA还要长，有可能是接头找错
+            if read_tail_length> 15 and gap_size > read_tail_length :
+                continue
+
+            # 获取gene_id
+            try:
+                gene_id = intersect_info_dict[read.query_name]['gene_id']
+            except KeyError:
+                gene_id = 'None'
+
+            # 3'adapter到read的距离
+            read.set_tag('ga', gap_size)
+            read.set_tag('pa', read_tail_length)
+            read.set_tag('gi', gene_id)
+            outbam.write(read)
+
+    
+    inbam.close()
+    outbam.close()
+
 
 if __name__ == "__main__":
     main()
+    

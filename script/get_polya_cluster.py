@@ -3,16 +3,29 @@
 '''
 @Author       : windz
 @Date         : 2020-05-24 19:07:01
-@LastEditTime : 2020-07-18 16:35:09
+@LastEditTime : 2020-08-01 15:06:23
 @Description  : 
 '''
 
 
-from collections import Counter, defaultdict
+from collections import Counter
+import numpy as np
 import pysam
 import click
 import pyranges as pr
 from concurrent.futures import ProcessPoolExecutor
+
+
+def get_entropy(site_counter, total_count):
+    '''
+    计算这个PAC内的polya site的entropy
+    '''
+    entropy = 0
+    for site in site_counter:
+        p = site_counter[site]/total_count
+        entropy += -p*np.log2(p)
+    return entropy
+
 
 
 STRAND_TO_BOOL = {'-': True, '+': False}
@@ -86,7 +99,8 @@ def get_three_end(infile, gene_id, gene_model):
             n += 1
             start = min(abs(pac[0]), abs(pac[-1]))
             end = max(abs(pac[0]), abs(pac[-1]))
-            polya_cluster.append(f'{chrom}\t{start-1}\t{end}\t{gene_id}_{n}\t{len(pac)}\t{strand}\n')
+            entropy = get_entropy(site_counter, len(pac))
+            polya_cluster.append(f'{chrom}\t{start-1}\t{end}\t{gene_id}_{n}\t{len(pac)}\t{strand}\t{entropy:.3f}\n')
 
             # 计算cluster的峰值
             summit = abs(site_counter_most[0][0])

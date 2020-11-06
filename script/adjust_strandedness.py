@@ -3,8 +3,9 @@
 '''
 @Author       : windz
 @Date         : 2020-04-13 17:11:58
-@LastEditTime : 2020-04-13 17:11:59
+@LastEditTime : 2020-05-20 15:09:21
 @Description  : adjust read strandedness
+                only output reads contain 3'adapter
 '''
 
 
